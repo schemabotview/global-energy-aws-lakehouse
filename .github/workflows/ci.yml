@@ -1,0 +1,30 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" } # matches Databricks Runtime 15.4 LTS
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: pytest -q -m "not spark"
+      - run: pytest -q -m spark # slow: local Spark + Iceberg end-to-end
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with: { terraform_version: "1.9.5" }
+      - run: terraform fmt -check -recursive infra
+      - run: |
+          for d in infra/terraform infra/terraform/databricks_account; do
+            terraform -chdir=$d init -backend=false -input=false
+            terraform -chdir=$d validate
+          done

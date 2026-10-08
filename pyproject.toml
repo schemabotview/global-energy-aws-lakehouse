@@ -1,0 +1,28 @@
+[project]
+name = "lakehouse"
+version = "0.1.0"
+description = "Global Energy AWS lakehouse MVP: RDS Postgres -> DMS -> S3 -> Databricks (Iceberg, Glue Catalog) -> Athena"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+# Local development / CI only. Databricks and Glue provide their own Spark; do not install pyspark there.
+dev = [
+  "pyspark==3.5.3", "pandas>=2.2", "numpy", "pyarrow>=15", "psycopg[binary]>=3.1",
+  "boto3", "pytest>=8", "ruff>=0.6",
+]
+
+[tool.setuptools.packages.find]
+include = ["lakehouse*", "generator*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["spark: needs local Spark + Iceberg (slow; downloads jars on first run)"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint.per-file-ignores]
+# Databricks notebooks use globals injected by the runtime (spark, dbutils).
+"databricks/notebooks/*.py" = ["F821", "E402"]

@@ -1,0 +1,95 @@
+{
+  "Comment": "Lakehouse run: Glue schema-contract check -> Databricks job (Bronze, Silver, Gold, DQ, reconcile) -> alert on any failure",
+  "StartAt": "ContractCheck",
+  "TimeoutSeconds": 14400,
+  "States": {
+    "ContractCheck": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "${glue_job_name}",
+        "Arguments": { "--run_id.$": "$.run_id" }
+      },
+      "ResultPath": "$.contract",
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "NotifyFailure" }],
+      "Next": "StartDatabricksRun"
+    },
+    "StartDatabricksRun": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Parameters": {
+        "ApiEndpoint": "${databricks_host}/api/2.1/jobs/run-now",
+        "Method": "POST",
+        "Authentication": { "ConnectionArn": "${connection_arn}" },
+        "RequestBody": {
+          "job_id": ${databricks_job_id},
+          "job_parameters": { "run_id.$": "$.run_id" }
+        }
+      },
+      "ResultSelector": { "run_id.$": "$.ResponseBody.run_id" },
+      "ResultPath": "$.databricks",
+      "Retry": [{
+        "ErrorEquals": ["States.Http.StatusCode.429", "States.Http.StatusCode.502", "States.Http.StatusCode.503"],
+        "IntervalSeconds": 60,
+        "MaxAttempts": 3,
+        "BackoffRate": 2
+      }],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "NotifyFailure" }],
+      "Next": "WaitForRun"
+    },
+    "WaitForRun": { "Type": "Wait", "Seconds": 60, "Next": "GetRun" },
+    "GetRun": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::http:invoke",
+      "Parameters": {
+        "ApiEndpoint": "${databricks_host}/api/2.1/jobs/runs/get",
+        "Method": "GET",
+        "Authentication": { "ConnectionArn": "${connection_arn}" },
+        "QueryParameters": { "run_id.$": "States.Format('{}', $.databricks.run_id)" }
+      },
+      "ResultSelector": { "state.$": "$.ResponseBody.state" },
+      "ResultPath": "$.run",
+      "Retry": [{
+        "ErrorEquals": ["States.Http.StatusCode.429", "States.Http.StatusCode.502", "States.Http.StatusCode.503"],
+        "IntervalSeconds": 30,
+        "MaxAttempts": 5,
+        "BackoffRate": 2
+      }],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "NotifyFailure" }],
+      "Next": "CheckRun"
+    },
+    "CheckRun": {
+      "Type": "Choice",
+      "Choices": [
+        { "Variable": "$.run.state.life_cycle_state", "StringEquals": "TERMINATED", "Next": "CheckResult" },
+        { "Variable": "$.run.state.life_cycle_state", "StringEquals": "INTERNAL_ERROR", "Next": "NotifyFailure" },
+        { "Variable": "$.run.state.life_cycle_state", "StringEquals": "SKIPPED", "Next": "NotifyFailure" }
+      ],
+      "Default": "WaitForRun"
+    },
+    "CheckResult": {
+      "Type": "Choice",
+      "Choices": [
+        { "Variable": "$.run.state.result_state", "StringEquals": "SUCCESS", "Next": "Succeeded" }
+      ],
+      "Default": "NotifyFailure"
+    },
+    "Succeeded": { "Type": "Succeed" },
+    "NotifyFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${topic_arn}",
+        "Subject": "Lakehouse run failed",
+        "Message.$": "States.Format('Lakehouse run {} failed. Execution: {}', $.run_id, $$.Execution.Id)"
+      },
+      "ResultPath": null,
+      "Next": "Failed"
+    },
+    "Failed": {
+      "Type": "Fail",
+      "Error": "LakehouseRunFailed",
+      "Cause": "Contract check, Databricks job, data-quality or reconciliation failed. See the alert, the Glue run and the Databricks run."
+    }
+  }
+}
