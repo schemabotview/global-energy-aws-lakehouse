@@ -1,0 +1,36 @@
+# Plan on pull requests, apply on manual dispatch behind the "production" environment (required reviewers).
+# Needs repo secrets: AWS_ROLE_ARN (OIDC), DATABRICKS_HOST, DATABRICKS_TOKEN, and a tfvars file stored as TFVARS.
+name: deploy
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ["infra/**", "orchestration/**", "glue/**", "lakehouse/**", "databricks/**"]
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with: { role-to-assume: "${{ secrets.AWS_ROLE_ARN }}", aws-region: eu-west-2 }
+      - run: echo "${{ secrets.TFVARS }}" > infra/terraform/terraform.tfvars
+      - run: terraform -chdir=infra/terraform init -input=false
+      - run: terraform -chdir=infra/terraform plan -input=false
+        env: { TF_VAR_databricks_token: "${{ secrets.DATABRICKS_TOKEN }}" }
+  apply:
+    if: github.event_name == 'workflow_dispatch'
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: production # configure required reviewers on this environment
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with: { role-to-assume: "${{ secrets.AWS_ROLE_ARN }}", aws-region: eu-west-2 }
+      - run: echo "${{ secrets.TFVARS }}" > infra/terraform/terraform.tfvars
+      - run: terraform -chdir=infra/terraform init -input=false
+      - run: terraform -chdir=infra/terraform apply -input=false -auto-approve
+        env: { TF_VAR_databricks_token: "${{ secrets.DATABRICKS_TOKEN }}" }

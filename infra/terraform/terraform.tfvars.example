@@ -1,0 +1,6 @@
+region          = "eu-west-2"
+env             = "dev"
+admin_cidrs     = ["203.0.113.10/32"] # your IP, so the generator can reach RDS
+alert_email     = "you@example.com"
+databricks_host = "https://dbc-xxxxxxxx-xxxx.cloud.databricks.com"
+# databricks_token: pass with TF_VAR_databricks_token, never commit it
