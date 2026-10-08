@@ -37,23 +37,48 @@ Kafka, Structured Streaming, Delta sink and DynamoDB hot path; Redshift, Spectru
 
 ```
 generator (Python) -> S3 landing/ (parquet, per-day manifest + checksum)
-  -> Glue job: bronze_load      -> bronze.* (Iceberg, append only)
-  -> Glue job: contract_check   -> pass / quarantine (S3 quarantine/ + control row)
-  -> Glue job: silver_clean     -> silver.* (+ silver.dlq)
-  -> Glue job: silver_scd2      -> silver.customer_tariff_history
-  -> Glue job: gold_build       -> gold.dim_*, gold.fact_*
-  -> Glue job: reconcile        -> gold.fact_reconciliation, run status
+  -> Databricks job: bronze_load    -> bronze.* (Iceberg, append only, Glue Catalog)
+  -> Glue job:       contract_check -> pass / quarantine (S3 quarantine/ + control row)
+  -> Databricks job: silver_clean + silver_scd2 -> silver.* (+ silver.dlq)
+  -> Databricks job: gold_build + reconcile     -> gold.dim_*, gold.fact_*, gold.fact_reconciliation
   -> Athena (workgroup) for queries
-Step Functions orchestrates the chain; Terraform provisions; GitHub Actions deploys.
+Step Functions orchestrates; Terraform provisions; GitHub Actions deploys.
 ```
 
-Choices to confirm (see section 7):
-- **Glue PySpark for everything**, not Databricks. Doc A uses Databricks for ingestion, but one engine keeps the MVP cheap and simple. The notebooks/jobs are plain PySpark, so porting is easy.
-- **Step Functions instead of MWAA** for the MVP. MWAA has a high fixed monthly cost. Dependencies, retries (3, backoff) and failure alerts via SNS are all still shown. Airflow DAGs are a phase-2 port.
-- **Iceberg on S3 with the Glue Catalog**, as both documents specify.
-- **Control tables** in Iceberg (`ctl.batch_audit`, `ctl.watermark`, `ctl.schema_contract`, `ctl.reconciliation_result`) instead of DynamoDB. Doc A uses DynamoDB for the watermark. Swap later if needed.
+Decisions taken:
+- **Glue + Databricks.** Databricks does landing to Bronze, Bronze to Silver and Silver to Gold, in notebooks as in the Azure project. Glue provides the Data Catalog (the table registry Athena reads) and runs the schema-contract check between Bronze and Silver.
+- **Step Functions** for orchestration (3 retries with backoff, SNS on failure). Glue steps use the native `startJobRun.sync`. Databricks steps call the Jobs API (see section 4).
+- **Athena only** for serving. Redshift and dbt are phase 2.
+- **Iceberg on S3, registered in the Glue Catalog**, so Databricks writes and Athena reads the same tables.
+- **Control tables** in Iceberg (`ctl.batch_audit`, `ctl.watermark`, `ctl.schema_contract`, `ctl.reconciliation_result`) instead of DynamoDB.
 
-## 4. Key design rules
+## 4. How AWS connects to Databricks
+
+Same product as on Azure; only the plumbing differs.
+
+| Concern | Azure (what you know) | AWS |
+|---|---|---|
+| Workspace creation | Azure resource in your subscription | Created through the Databricks **account console** (accounts.cloud.databricks.com) or the Terraform `databricks` provider with account-level `mws_*` resources. It is not an AWS resource, and billing (DBUs) is separate from your AWS bill. |
+| Compute location | Managed resource group in your subscription | Control plane is in Databricks' AWS account. Clusters (EC2) run in **your** account and VPC. |
+| Permission to launch compute | Azure-managed | A **cross-account IAM role** in your account, trusted by Databricks' AWS account with your Databricks account ID as `sts:ExternalId`. It is registered as a "credential configuration". |
+| Workspace root storage | Managed storage account | An S3 bucket plus bucket policy, registered as a "storage configuration". |
+| Network | VNet injection (optional) | Optional customer-managed VPC (two private subnets, security group, NAT or VPC endpoints). Databricks-managed VPC is fine for the MVP. |
+| Access to your lake | Access connector (managed identity) | Either an **instance profile** (IAM role attached to the cluster) or a **Unity Catalog storage credential** (IAM role that trusts UC and itself, with external ID) tied to an **external location** on an S3 path. |
+| Secrets | Key Vault | Secrets Manager, or Databricks secret scopes. |
+| Table registry | Unity Catalog / Hive metastore | Unity Catalog, or the **Glue Data Catalog** as the metastore. |
+| Orchestrator calling Databricks | ADF Databricks activity | Step Functions calls the Jobs API (`run-now`, then poll `runs/get`) through an HTTP Task with a Databricks service-principal token held in Secrets Manager. |
+
+**MVP wiring (recommended):**
+1. Terraform creates the S3 buckets (`landing`, `lakehouse`, `quarantine`), the Glue databases, and two IAM roles: the cross-account role and a **cluster instance profile** that can read/write only the lakehouse and landing prefixes and use the Glue Catalog.
+2. Terraform (databricks provider) creates the credential and storage configurations, the workspace, the instance profile registration, a job cluster policy and the job definitions.
+3. Notebooks use the Iceberg Spark runtime with `GlueCatalog` and the cluster's instance profile, so the tables Databricks writes are the same tables Athena reads.
+4. Step Functions runs the chain and stops on a contract-check failure.
+
+**Risk to prove first (step 2 in the build order):** Databricks writing Iceberg through the Glue Catalog needs the Iceberg runtime library on the cluster, and it bypasses Unity Catalog governance. If it proves awkward, the fallback is Unity Catalog with Delta + UniForm (Iceberg metadata), and Athena reading through Glue. Do a one-table spike (Databricks write, Athena read) before building anything else.
+
+Unity Catalog with a storage credential is the right governance model for phase 2. Doing it now adds a one-off manual account-admin step, so the MVP starts with the instance profile.
+
+## 5. Key design rules
 
 1. Silver reads only Bronze, never the source, so any day can be replayed.
 2. Surrogate keys come from one shared helper used by both dimensions and facts. (The previous Azure project hit a bug where the fact and dimension hashed keys differently, which orphaned every foreign key. Add a test that fails on any orphaned FK.)
@@ -63,7 +88,7 @@ Choices to confirm (see section 7):
 6. Customer PII sits only in a restricted `dim_customer_pii`. Facts and `dim_customer` carry no names or addresses.
 7. Every job is idempotent: re-running a `batch_run_id` produces the same result with no duplicates.
 
-## 5. Build order and acceptance tests
+## 6. Build order and acceptance tests
 
 Each step is done only when its test passes. Run locally on PySpark + Iceberg before any AWS deploy, and re-run after every fix. (The last project shipped with the fixed code, day 2 and the re-run path untested. Do not repeat that.)
 
@@ -71,7 +96,7 @@ Each step is done only when its test passes. Run locally on PySpark + Iceberg be
 |---|---|---|
 | 0 | Repo skeleton, CI (lint, unit tests), pre-commit secret scan | CI green on an empty PR. |
 | 1 | Generator: day 1 (full load) and day 2 (new reads, corrections, a tariff change, a unit change, duplicates, bad rows) | Row counts match the config. The injected defect counts are written to a file for later checks. |
-| 2 | Local runner: Spark + Iceberg, `bronze_load` | Bronze counts equal landing counts. A re-run adds no rows. |
+| 2 | **Spike:** Databricks writes one Iceberg table via the Glue Catalog and Athena reads it. Then local runner and `bronze_load`. | Athena returns the written rows. Bronze counts equal landing counts. A re-run adds no rows. |
 | 3 | `contract_check` | Additive column passes. Dropped column or Wh unit quarantines and halts Silver. |
 | 4 | `silver_clean` | Duplicates removed, corrections applied, injected bad rows land in the DLQ with the right reasons. Counts match step 1. |
 | 5 | `silver_scd2` and `gold_build` | One current row per customer. No overlapping ranges. Zero orphaned FKs. Day 2 closes the old tariff row and opens a new one. |
@@ -82,13 +107,14 @@ Each step is done only when its test passes. Run locally on PySpark + Iceberg be
 
 Suggested order of effort: steps 0 to 6 locally first (about 60% of the work), then 7 to 9.
 
-## 6. Repo layout
+## 7. Repo layout
 
 ```
 infra/terraform/        modules: storage, glue, athena, orchestration, iam
 generator/              synthetic data (day 1 / day 2, injected defects)
-pipeline/jobs/          bronze_load, contract_check, silver_clean, silver_scd2, gold_build, reconcile
-pipeline/common/        keys (sk), audit columns, contracts, config
+databricks/notebooks/   _common, bronze_load, silver_clean, silver_scd2, gold_build, reconcile
+glue/                   contract_check job
+databricks/jobs/        job and cluster-policy definitions
 orchestration/          state machine definition
 tests/                  unit + local end-to-end (day 1, day 2, re-run)
 sql/athena/             sample queries
@@ -96,18 +122,19 @@ docs/                   data model, runbook
 .github/workflows/      ci.yml, deploy.yml (plan on PR, apply with approval)
 ```
 
-## 7. Decisions needed
+## 8. Decisions
 
-1. **Engine:** Glue only (recommended) or Glue + Databricks to mirror Doc A?
-2. **Orchestration:** Step Functions (recommended) or MWAA?
-3. **Serving:** Athena only (recommended) or add Redshift Serverless + dbt now?
-4. **AWS account:** is there a dev account with permission to create IAM roles and Glue/Athena/S3, or should the MVP stay local until one exists?
-5. **Interview use or real build?** If this is interview prep, keep the phase-2 streaming path as a design discussion. If it will be shown as working code, build only what passes the tests above.
+Settled: Glue + Databricks, Step Functions, Athena only.
 
-## 8. Rough cost (dev, small data)
+Still open:
+1. **Databricks account:** do you have one with an AWS-enabled account console (not the free edition, which cannot attach your own AWS account)?
+2. **AWS account:** a dev account where Terraform can create IAM roles, Glue, Athena, S3 and Step Functions? Otherwise the MVP stays local until one exists.
+3. **Interview prep or real build?** Decides whether the streaming path stays a design discussion.
 
-Under about 20 USD per month with Step Functions, small Glue runs (G.1X, few DPUs for minutes per day), S3 and Athena. MWAA alone would add several hundred USD per month, which is the main reason to defer it.
+## 9. Rough cost (dev, small data)
 
-## 9. Status
+AWS side is under about 20 USD per month (Step Functions, small Glue runs, S3, Athena). Databricks adds DBUs plus the EC2 under them, so use small job clusters with auto-termination. MWAA would add several hundred USD per month, which is why it is deferred.
+
+## 10. Status
 
 Plan only. No code, Terraform or AWS resources exist yet.
