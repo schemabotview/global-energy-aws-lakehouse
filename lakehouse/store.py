@@ -26,7 +26,7 @@ class Store:
     def write_json(self, key: str, obj) -> None:
         self.write_bytes(key, json.dumps(obj, indent=2, default=str).encode())
 
-    def copy_to(self, key: str, dst: "Store", dst_key: str) -> None:
+    def copy_to(self, key: str, dst: Store, dst_key: str) -> None:
         dst.write_bytes(dst_key, self.read_bytes(key))
 
 

@@ -7,9 +7,10 @@ billing control totals.
 
 Design and decisions: [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md). Model and rules: [docs/data-model.md](docs/data-model.md).
 
-> **Status: written, never executed.** Nothing in this repo (Python, tests, Terraform, ASL, notebooks) has been run,
-> linted, validated or deployed. Expect small fixes on first contact. The first things to run are listed in
-> "First run" below, in the order that finds problems cheapest.
+> **Status: runs locally, never deployed.** `ruff check`, the full `pytest` suite (15 tests, including the
+> Spark/Iceberg end-to-end) and `terraform validate` on both stacks all pass. Nothing has been applied to an AWS
+> account, so the notebooks, the Step Functions definition and every resource argument are still unproven against
+> the real services — deploy steps 4-7 of the build order in the plan remain to be run.
 
 ```
 generator/      synthetic scenario (day 1 snapshot, day 2 changes) -> PostgreSQL, or a local DMS imitation
@@ -24,14 +25,27 @@ tests/          contract + generator unit tests; local Spark/Iceberg end-to-end
 scripts/        run_local.py
 ```
 
-## First run (cheapest first)
+## Run it locally
 
-1. `pip install -e ".[dev]"` then `ruff check .` and `pytest -m "not spark"` (contract gate, generator, DMS-file shape).
-2. `pytest -m spark`, or `python scripts/run_local.py`: the full pipeline on local Spark + Iceberg against a DMS imitation:
-   baseline, bad control total (must block), breaking schema (must quarantine), additive schema (must flow through).
-3. `terraform -chdir=infra/terraform init && terraform validate` (resource arguments, notably `aws_dms_s3_endpoint`, were
-   written from memory of provider 5.x and are the most likely thing to need a tweak).
-4. Deploy and run the spike (below) before the full pipeline.
+Needs a JDK (17 is what this is run against; set `JAVA_HOME` if several are installed) and a virtualenv on
+Python 3.10-3.12 — pyspark 3.5.3 has no wheel for 3.13+.
+
+```bash
+python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+export JAVA_HOME=$(/usr/libexec/java_home -v 17)      # macOS; skip where the JDK is already the default
+.venv/bin/ruff check .
+.venv/bin/pytest -m "not spark"                       # contract gate, generator, DMS-file shape
+.venv/bin/pytest -m spark                             # full pipeline on local Spark + Iceberg (~75s, downloads the
+                                                      # Iceberg jar on the first run)
+```
+
+The Spark suite drives the whole batch against a DMS imitation: baseline over two days plus a rerun, bad control
+total (must block), breaking schema (must quarantine and hold), additive schema (must flow through).
+`python scripts/run_local.py` runs the same pipeline outside pytest and leaves the warehouse on disk to inspect.
+
+Terraform: `terraform fmt -check -recursive infra`, then `init -backend=false` and `validate` in both
+`infra/terraform` and `infra/terraform/databricks_account`. Validation only type-checks the configuration; it says
+nothing about whether the resources behave, so deploy and run the spike (below) before the full pipeline.
 
 ## Deploy
 

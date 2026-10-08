@@ -28,7 +28,7 @@ class Settings:
     recon_threshold_pct: float = 0.01
 
     @staticmethod
-    def from_env() -> "Settings":
+    def from_env() -> Settings:
         return Settings(
             landing_uri=os.environ["LAKE_LANDING_URI"],
             ctl_uri=os.environ["LAKE_CTL_URI"],

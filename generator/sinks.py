@@ -109,30 +109,27 @@ def apply_scenario(table: str, df: pd.DataFrame, scenario: str) -> pd.DataFrame:
     return df
 
 
-def _write_parquet(df: pd.DataFrame, path: Path, commit_ts: list[dt.datetime]) -> None:
+def _write_parquet(table: str, df: pd.DataFrame, path: Path, commit_ts: list[dt.datetime]) -> None:
+    """Families are resolved per table, never globally: the same column name can carry different
+    types in different tables (`period` is an int in settlement_calendar, a date in
+    reconciliation_control)."""
     import pyarrow as pa
     import pyarrow.parquet as pq
 
+    families = TABLES[table].columns
     arrays, names = [], []
     names.append("Op")
     arrays.append(pa.array(df["Op"].tolist(), type=pa.string()))
     for col in df.columns:
         if col == "Op":
             continue
-        fam = TABLES_FAMILY.get(col) or EXTRA_FAMILIES[col]
+        fam = families.get(col) or EXTRA_FAMILIES[col]
         names.append(col)
         arrays.append(pa.array([py(v) for v in df[col]], type=_arrow_type(fam)))
     names.append("dms_commit_ts")
     arrays.append(pa.array(commit_ts, type=pa.timestamp("us")))
     path.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(pa.Table.from_arrays(arrays, names=names), path)
-
-
-# column -> family across all tables (names are consistent between tables)
-TABLES_FAMILY: dict[str, str] = {}
-for _t in TABLES.values():
-    for _c, _f in _t.columns.items():
-        TABLES_FAMILY.setdefault(_c, _f)
 
 
 class DmsImitationSink:
@@ -153,7 +150,7 @@ class DmsImitationSink:
             df = df.copy()
             df.insert(0, "Op", "I")
             path = self.root / name / "LOAD00000001.parquet"
-            _write_parquet(df, path, [load_ts] * len(df))
+            _write_parquet(name, df, path, [load_ts] * len(df))
             out.append(path)
         return out
 
@@ -166,7 +163,7 @@ class DmsImitationSink:
             ts = _commit_ts(df, load_ts)
             df = apply_scenario(name, df, self.scenario)
             path = self.root / name / f"{load_ts:%Y/%m/%d}" / f"{load_ts:%Y%m%d-%H%M%S}000.parquet"
-            _write_parquet(df, path, ts)
+            _write_parquet(name, df, path, ts)
             out.append(path)
         return out
 

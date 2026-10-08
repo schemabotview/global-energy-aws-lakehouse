@@ -100,7 +100,7 @@ def _make_readings(rng, meter_ids: list[str], cal_day: pd.DataFrame) -> pd.DataF
         "reading_ts": pd.to_datetime(cal_day["start_utc"].tolist() * meters),
     })
     rd["interval_end"] = rd["reading_ts"] + HALF_HOUR
-    rd["reading_id"] = [f"{m}|{t:%Y%m%dT%H%MZ}" for m, t in zip(rd["meter_id"], rd["reading_ts"])]
+    rd["reading_id"] = [f"{m}|{t:%Y%m%dT%H%MZ}" for m, t in zip(rd["meter_id"], rd["reading_ts"], strict=True)]
     rd["version"] = 1
     rd["kwh_m"] = milli.ravel().astype(float)
     rd["reading_type"] = "HALF_HOURLY"
@@ -124,7 +124,7 @@ def _inject_defects(rng, rd: pd.DataFrame, rate: float) -> tuple[pd.DataFrame, d
     replay["source_updated_at"] = replay["source_updated_at"] + HALF_HOUR
     orphan = rd.iloc[orphan_i].copy()
     orphan["meter_id"] = [f"MTR-X{i:05d}" for i in range(len(orphan))]
-    orphan["reading_id"] = [f"{m}|{t:%Y%m%dT%H%MZ}" for m, t in zip(orphan["meter_id"], orphan["reading_ts"])]
+    orphan["reading_id"] = [f"{m}|{t:%Y%m%dT%H%MZ}" for m, t in zip(orphan["meter_id"], orphan["reading_ts"], strict=True)]
     out = pd.concat([rd, replay, orphan], ignore_index=True)
     return out, {"null_consumption": k, "negative_consumption": k, "invalid_reading_type": k,
                  "newer_version_replays": k, "unknown_meter": k}
@@ -150,7 +150,7 @@ def _readings_frame(rd: pd.DataFrame) -> pd.DataFrame:
 def _control(period: dt.date, total_m: int, count: int, run_id: str, version: int, created: dt.datetime,
              inflate: bool = False) -> dict:
     if inflate:
-        total_m = int(round(total_m * 1.01))
+        total_m = round(total_m * 1.01)
     return {
         "source_name": "BILLING", "period": period, "control": "CONSUMPTION_KWH", "run_id": run_id,
         "expected_count": int(count), "expected_total": dec(total_m), "unit": "kWh",
@@ -164,7 +164,10 @@ def _with_op(df: pd.DataFrame, op: str) -> pd.DataFrame:
     return out
 
 
-def build_scenario(cfg: Config = Config()) -> Scenario:
+DEFAULT_CONFIG = Config()
+
+
+def build_scenario(cfg: Config = DEFAULT_CONFIG) -> Scenario:
     rng = np.random.default_rng(cfg.seed)
     d1, d2 = cfg.day1, cfg.day2
     created = utc(d1 - dt.timedelta(days=400))
@@ -339,7 +342,7 @@ def build_scenario(cfg: Config = Config()) -> Scenario:
                  "defects": defects2, "corrections": n_cor, "tariff_changes": n_tc,
                  "customer_changes": n_cc, "new_meters": n_nm, "faulty_meters": len(faulty)},
         "controls": [
-            {k: str(v) for k, v in row.items()} for row in [ctl1] + controls2.to_dict("records")
+            {k: str(v) for k, v in row.items()} for row in [ctl1, *controls2.to_dict("records")]
         ],
         "final_totals_kwh": {
             str(d1): str(dec(int(final1["kwh_m"].sum()))), str(d2): str(dec(int(final2["kwh_m"].sum()))),

@@ -11,13 +11,13 @@ from pathlib import Path
 
 os.environ.setdefault("LAKE_ENV", "local")
 
-from generator.model import Config, build_scenario  # noqa: E402
-from generator.sinks import SCENARIOS, DmsImitationSink  # noqa: E402
-from lakehouse import contract  # noqa: E402
-from lakehouse.config import Settings  # noqa: E402
-from lakehouse.pipeline import run_batch  # noqa: E402
-from lakehouse.spark import get_spark  # noqa: E402
-from lakehouse.store import LocalStore  # noqa: E402
+from generator.model import Config, build_scenario
+from generator.sinks import SCENARIOS, DmsImitationSink
+from lakehouse import contract
+from lakehouse.config import Settings
+from lakehouse.pipeline import run_batch
+from lakehouse.spark import get_spark
+from lakehouse.store import LocalStore
 
 
 def main() -> None:

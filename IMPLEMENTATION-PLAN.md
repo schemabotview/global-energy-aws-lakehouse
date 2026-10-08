@@ -1,7 +1,7 @@
 # Global Energy AWS Lakehouse: MVP Implementation Plan
 
 Sources: `Case_Study_1_Global_Energy_AWS.pdf` (**Doc A**) and `Global-Energy-AWS-Lakehouse-Platform.pdf` (**Doc B**).
-Status: the codebase described here is written but has never been run (see README).
+Status: steps 1-5 of the build order below are run and passing locally; steps 6-7 need an AWS account (see README).
 
 ## 1. Decisions
 
@@ -72,15 +72,27 @@ UniForm (Iceberg metadata) and Athena reading through Glue.
 
 ## 6. Build order and what proves each step
 
-| # | Step | Proof (all still to be run) |
-|---|---|---|
-| 1 | Generator + Postgres DDL | `pytest -m "not spark"`: totals match an independent recomputation, DST day has 50 periods |
-| 2 | Contract gate | unit tests: additive passes, breaking quarantines and holds, idempotent per run |
-| 3 | Local pipeline on DMS imitation | `pytest -m spark`: counts, totals, SCD2, corrections, rerun is a no-op |
-| 4 | Negative paths | bad control total blocks publication; breaking schema is held; additive flows into Bronze |
-| 5 | Terraform | `terraform validate`; apply to the dev account |
-| 6 | Spike | Databricks writes Iceberg via Glue, Athena reads it |
-| 7 | AWS day 1, day 2, rerun | Athena totals equal `expected.json`; rerun changes nothing |
+| # | Step | Proof | State |
+|---|---|---|---|
+| 1 | Generator + Postgres DDL | `pytest -m "not spark"`: totals match an independent recomputation, DST day has 50 periods | passing |
+| 2 | Contract gate | unit tests: additive passes, breaking quarantines and holds, idempotent per run | passing |
+| 3 | Local pipeline on DMS imitation | `pytest -m spark`: counts, totals, SCD2, corrections, rerun is a no-op | passing |
+| 4 | Negative paths | bad control total blocks publication; breaking schema is held; additive flows into Bronze | passing |
+| 5 | Terraform | `terraform fmt`, `validate` on both stacks | validates; **not applied** |
+| 6 | Spike | Databricks writes Iceberg via Glue, Athena reads it | not run (needs AWS) |
+| 7 | AWS day 1, day 2, rerun | Athena totals equal `expected.json`; rerun changes nothing | not run (needs AWS) |
+
+What the local suite does **not** reach, because each piece only exists against a real service: `PostgresSink` and
+`sql/postgres/001_schema.sql` (first executed at deploy step 2), `S3Store` (the tests drive `LocalStore`), the Glue
+entry point `glue/contract_check.py`, the notebooks and `lakehouse.notebook.params`, and the Step Functions
+definition. The pipeline logic underneath them is covered; the wiring is not.
+
+Bugs the first local run turned up, all fixed: the table registry could not be imported at all (a column called
+`name` collided with the `_t()` helper's own parameter); the DMS imitation typed columns from a global
+column-to-family map, which is wrong wherever two tables disagree (`period`); Bronze derived the file key that
+`ctl.landing_files` is keyed on by matching `/src/` in the path, so outside the AWS layout it recorded an empty key
+and the idempotency guard did nothing; and the contract gate's `OVERLAP` rewind re-listed files a previous run had
+already checked, passing them into a second manifest.
 
 ## 7. Known limitations
 

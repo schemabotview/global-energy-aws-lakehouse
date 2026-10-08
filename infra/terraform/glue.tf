@@ -45,9 +45,9 @@ resource "aws_glue_job" "contract_check" {
     python_version  = "3"
   }
   default_arguments = {
-    "--extra-py-files"            = "s3://${aws_s3_bucket.lake.bucket}/${aws_s3_object.lakehouse_zip.key}"
-    "--additional-python-modules" = "pyarrow"
-    "--bucket"                    = aws_s3_bucket.lake.bucket
+    "--extra-py-files"                   = "s3://${aws_s3_bucket.lake.bucket}/${aws_s3_object.lakehouse_zip.key}"
+    "--additional-python-modules"        = "pyarrow"
+    "--bucket"                           = aws_s3_bucket.lake.bucket
     "--enable-continuous-cloudwatch-log" = "true"
   }
 }

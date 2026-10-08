@@ -6,6 +6,7 @@ instance profile. Locally (LAKE_ENV=local) a Hadoop-catalog Iceberg warehouse in
 from __future__ import annotations
 
 import os
+import sys
 
 from lakehouse.config import CATALOG, NAMESPACES, fq
 
@@ -23,6 +24,9 @@ def get_spark(warehouse: str | None = None):
 
     if os.getenv("LAKE_ENV") == "local":
         warehouse = warehouse or os.getenv("LAKE_WAREHOUSE", ".local/warehouse")
+        # Spark launches workers with whatever `python3` is on PATH, which in a virtualenv is usually a
+        # different minor version than the driver; Spark then fails the stage on PYTHON_VERSION_MISMATCH.
+        os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
         spark = (
             SparkSession.builder.master("local[2]").appName("lakehouse-local")
             .config("spark.jars.packages", ICEBERG_PACKAGE)

@@ -42,15 +42,15 @@ resource "aws_dms_s3_endpoint" "target" {
   bucket_folder           = "dms"
   service_access_role_arn = aws_iam_role.dms_s3.arn
 
-  data_format                     = "parquet"
-  parquet_version                 = "parquet-2-0"
+  data_format                      = "parquet"
+  parquet_version                  = "parquet-2-0"
   parquet_timestamp_in_millisecond = false
-  include_op_for_full_load        = true      # Op column on full-load rows too (value I)
-  timestamp_column_name           = "dms_commit_ts"
-  date_partition_enabled       = true      # CDC files land under <table>/YYYY/MM/DD/
-  cdc_max_batch_interval          = 60
-  cdc_min_file_size               = 32000
-  encryption_mode                 = "SSE_S3"
+  include_op_for_full_load         = true # Op column on full-load rows too (value I)
+  timestamp_column_name            = "dms_commit_ts"
+  date_partition_enabled           = true # CDC files land under <table>/YYYY/MM/DD/
+  cdc_max_batch_interval           = 60
+  cdc_min_file_size                = 32000
+  encryption_mode                  = "SSE_S3"
 }
 
 resource "aws_dms_replication_task" "this" {
@@ -71,7 +71,7 @@ resource "aws_dms_replication_task" "this" {
     }]
   })
   replication_task_settings = jsonencode({
-    Logging = { EnableLogging = true }
+    Logging          = { EnableLogging = true }
     FullLoadSettings = { TargetTablePrepMode = "DO_NOTHING" }
   })
 }

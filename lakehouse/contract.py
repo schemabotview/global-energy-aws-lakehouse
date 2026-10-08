@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import datetime as dt
 import io
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from lakehouse.store import Store
 from lakehouse.tables import META_COLUMNS, TABLES
@@ -106,7 +106,12 @@ def run_check(
     schema_of = schema_of or (lambda key: parquet_families(landing, key))
     state = ctl.read_json(STATE_KEY) or {}
     since = dt.datetime.fromisoformat(state["checked_through"]) - OVERLAP if state.get("checked_through") else None
-    files = [o for o in landing.list() if o.key.endswith(".parquet") and (since is None or o.mtime > since)]
+    listed = [o for o in landing.list() if o.key.endswith(".parquet") and (since is None or o.mtime > since)]
+    # The watermark is deliberately rewound by OVERLAP so a file that lands out of order is still seen. That
+    # re-lists files the previous run already checked, so the keys inside the window are remembered and skipped
+    # here: without this a re-listed file is passed into a second manifest and Bronze loads it twice.
+    seen = set(state.get("checked_keys", []))
+    files = [o for o in listed if o.key not in seen]
     files.sort(key=lambda o: (o.mtime, o.key))
 
     held = held_tables(ctl)
@@ -139,11 +144,14 @@ def run_check(
         landing.copy_to(q["key"], quarantine, f"{run_id}/{q['key']}")
         landing.delete(q["key"])
 
-    checked_through = max([o.mtime for o in files], default=None)
-    if checked_through is None and state.get("checked_through"):
-        checked_through_iso = state["checked_through"]
+    # Advances over everything listed, not just the files checked now: a file skipped as already seen still
+    # belongs behind the watermark.
+    checked_through = max([o.mtime for o in listed], default=None)
+    if checked_through is None:
+        checked_through_iso, checked_keys = state.get("checked_through"), sorted(seen)
     else:
-        checked_through_iso = _iso(checked_through) if checked_through else None
+        checked_through_iso = _iso(checked_through)
+        checked_keys = sorted(o.key for o in listed if o.mtime > checked_through - OVERLAP)
 
     manifest = {
         "run_id": run_id,
@@ -155,5 +163,5 @@ def run_check(
     }
     ctl.write_json(manifest_key, manifest)
     if checked_through_iso:
-        ctl.write_json(STATE_KEY, {"checked_through": checked_through_iso})
+        ctl.write_json(STATE_KEY, {"checked_through": checked_through_iso, "checked_keys": checked_keys})
     return manifest

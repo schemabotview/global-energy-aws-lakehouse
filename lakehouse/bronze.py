@@ -54,6 +54,16 @@ def _append(spark, target: str, df) -> None:
     df.select(*cols).writeTo(target).append()
 
 
+def _file_key_col(todo: list[str]):
+    """Map each row's source file back to its manifest key.
+
+    Matched against the keys being loaded rather than parsed out of the path: the file key is what
+    `ctl.landing_files` is keyed on, and deriving it from the path shape ties the idempotency guard to one
+    specific layout (it silently yields "" anywhere the landing root is not `.../src/`).
+    """
+    return F.coalesce(*[F.when(F.col("_source_file").endswith(f"/{k}"), F.lit(k)) for k in todo])
+
+
 def load_table(spark, tbl: Table, keys: list[str], landing_uri: str, run_id: str) -> dict:
     done = {r.file_key for r in spark.table(LANDING_FILES).where(F.col("table_name") == tbl.name)
             .select("file_key").collect()}
@@ -76,7 +86,7 @@ def load_table(spark, tbl: Table, keys: list[str], landing_uri: str, run_id: str
         .withColumn("source_record_id", F.concat_ws("|", *[F.col(c).cast("string") for c in tbl.pk]))
         .withColumn("ingested_at", F.current_timestamp())
         .withColumn("batch_run_id", F.lit(run_id))
-        .withColumn("_file_key", F.regexp_extract("_source_file", rf"/src/({tbl.name}/.*)$", 1))
+        .withColumn("_file_key", _file_key_col(todo))
     )
     if "source_updated_at" not in df.columns:
         df = df.withColumn("source_updated_at", F.lit(None).cast("timestamp"))

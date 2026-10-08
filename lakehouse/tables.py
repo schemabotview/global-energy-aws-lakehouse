@@ -20,7 +20,9 @@ class Table:
     source_system: str
 
 
-def _t(name: str, pk: list[str], source: str, **cols: str) -> Table:
+def _t(name: str, pk: list[str], source: str, /, **cols: str) -> Table:
+    # Positional-only: `customer` and `tariff` both have a column called `name`, which would
+    # otherwise collide with this function's own parameter.
     return Table(name, tuple(pk), dict(cols), source)
 
 

@@ -9,7 +9,7 @@ dependencies = []
 # Local development / CI only. Databricks and Glue provide their own Spark; do not install pyspark there.
 dev = [
   "pyspark==3.5.3", "pandas>=2.2", "numpy", "pyarrow>=15", "psycopg[binary]>=3.1",
-  "boto3", "pytest>=8", "ruff>=0.6",
+  "boto3", "pytest>=8", "ruff>=0.16.10", # keep in step with .pre-commit-config.yaml
 ]
 
 [tool.setuptools.packages.find]
@@ -22,6 +22,14 @@ markers = ["spark: needs local Spark + Iceberg (slow; downloads jars on first ru
 [tool.ruff]
 line-length = 110
 target-version = "py310"
+
+# Selected by prefix and pinned here on purpose: ruff's default rule set changes between
+# releases, and CI installs ruff unpinned while pre-commit pins a tag. Without this, the two
+# disagree about which rules exist (the `noqa: E402` directives read as unused under one and
+# are required under the other).
+[tool.ruff.lint]
+# E4/E7/E9 (not E5: line length is ruff-format's job, and `line-length` above is its target).
+select = ["E4", "E7", "E9", "F", "W", "B", "UP", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
 # Databricks notebooks use globals injected by the runtime (spark, dbutils).

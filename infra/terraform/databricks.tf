@@ -8,15 +8,15 @@ locals {
   ]
 
   spark_conf = {
-    "spark.sql.extensions"                      = "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
-    "spark.sql.catalog.lake"                    = "org.apache.iceberg.spark.SparkCatalog"
-    "spark.sql.catalog.lake.catalog-impl"       = "org.apache.iceberg.aws.glue.GlueCatalog"
-    "spark.sql.catalog.lake.warehouse"          = "s3://${aws_s3_bucket.lake.bucket}/warehouse"
-    "spark.sql.catalog.lake.io-impl"            = "org.apache.iceberg.aws.s3.S3FileIO"
-    "spark.sql.session.timeZone"                = "UTC"
+    "spark.sql.extensions"                        = "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
+    "spark.sql.catalog.lake"                      = "org.apache.iceberg.spark.SparkCatalog"
+    "spark.sql.catalog.lake.catalog-impl"         = "org.apache.iceberg.aws.glue.GlueCatalog"
+    "spark.sql.catalog.lake.warehouse"            = "s3://${aws_s3_bucket.lake.bucket}/warehouse"
+    "spark.sql.catalog.lake.io-impl"              = "org.apache.iceberg.aws.s3.S3FileIO"
+    "spark.sql.session.timeZone"                  = "UTC"
     "spark.sql.parquet.inferTimestampNTZ.enabled" = "false"
-    "spark.databricks.cluster.profile"          = "singleNode"
-    "spark.master"                              = "local[*, 4]"
+    "spark.databricks.cluster.profile"            = "singleNode"
+    "spark.master"                                = "local[*, 4]"
   }
 
   # task_key => notebook, upstream tasks, retries. Retries are for infrastructure hiccups only: a DQ or
